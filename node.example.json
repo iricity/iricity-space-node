@@ -1,0 +1,12 @@
+{
+  "node_id": "node_example",
+  "name": "Example ground node",
+  "operator": "Example Operator",
+  "jurisdiction": "IN",
+  "site": {
+    "latitude": 28.6139,
+    "longitude": 77.209,
+    "altitude_m": 216
+  },
+  "created_at": "2026-01-01T00:00:00.000Z"
+}

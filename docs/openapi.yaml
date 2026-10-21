@@ -1,0 +1,734 @@
+openapi: 3.1.0
+info:
+  title: Space Node API
+  version: 0.1.0
+  description: |
+    The reference node of the Frontier State Protocol. One operator-controlled process
+    with a did:key identity, a declared site, self-declared authorizations, and a stream
+    of signed objects: pass predictions and observations in state-envelope/1 envelopes,
+    receipted in the node's own append-only state-receipt/1 chain. Everything the node
+    publishes verifies offline against its DID.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: http://localhost:3100
+    description: Local node
+security: []
+
+paths:
+  /:
+    get:
+      summary: Node summary and endpoint index
+      responses:
+        "200":
+          description: Summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: { type: string }
+                  version: { type: string }
+                  protocol:
+                    type: object
+                    properties:
+                      envelope: { type: string, enum: [state-envelope/1] }
+                      receipt: { type: string, enum: [state-receipt/1] }
+                  node_id: { type: string }
+                  did: { type: string }
+                  signer_mode: { $ref: "#/components/schemas/SignerMode" }
+                  endpoints:
+                    type: object
+                    additionalProperties: { type: string }
+                required: [name, version, protocol, node_id, did, signer_mode, endpoints]
+
+  /health:
+    get:
+      summary: Liveness, identity posture, chain length
+      responses:
+        "200":
+          description: Health
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: { type: string }
+                  version: { type: string }
+                  status: { type: string, enum: [ok] }
+                  timestamp: { type: string, format: date-time }
+                  node_id: { type: string }
+                  did: { type: string }
+                  signer_mode: { $ref: "#/components/schemas/SignerMode" }
+                  durable_identity: { type: boolean }
+                  declared_site: { type: boolean }
+                  receipt_count: { type: integer }
+                  elements_cache: { type: object }
+                required: [name, version, status, timestamp, node_id, did, signer_mode, durable_identity, declared_site, receipt_count]
+
+  /openapi.yaml:
+    get:
+      summary: This document
+      responses:
+        "200":
+          description: OpenAPI document
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /identity:
+    get:
+      summary: The node's identity, identity record, authorizations and site
+      responses:
+        "200":
+          description: Identity
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  node_id: { type: string }
+                  name: { type: string }
+                  operator: { type: string }
+                  jurisdiction: { type: [string, "null"] }
+                  identity: { $ref: "#/components/schemas/NodeIdentity" }
+                  identity_record: { $ref: "#/components/schemas/IdentityRecord" }
+                  authorizations:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuthorizationRecord" }
+                  site: { $ref: "#/components/schemas/Site" }
+                  description_source: { type: string }
+                required: [version, node_id, name, operator, identity, identity_record, authorizations, site]
+
+  /authorizations:
+    get:
+      summary: Self-declared authorization records (receive-only; no transmit is claimed)
+      responses:
+        "200":
+          description: Authorizations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  node_id: { type: string }
+                  profile_note: { type: string }
+                  authorizations:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuthorizationRecord" }
+                required: [version, node_id, authorizations]
+
+  /passes:
+    get:
+      summary: Predicted passes over the declared site, signed by the node
+      description: |
+        Public and rate limited per client. Signed but never stored; receipt is null.
+        Zone-less start times are read as UTC. Windows above 48 hours are clamped.
+      parameters:
+        - { name: norad_id, in: query, schema: { type: integer, default: 25544 } }
+        - { name: hours, in: query, schema: { type: number, default: 24, maximum: 48 } }
+        - { name: min_elevation_deg, in: query, schema: { type: number, default: 10 } }
+        - { name: start, in: query, schema: { type: string, format: date-time } }
+        - { name: fixture, in: query, description: Use the bundled elements instead of CelesTrak, schema: { type: boolean, default: false } }
+      responses:
+        "200":
+          description: Signed prediction
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PassPredictionEntry" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "429": { $ref: "#/components/responses/TooMany" }
+        "502": { $ref: "#/components/responses/Upstream" }
+
+  /receipts:
+    get:
+      summary: The node's receipt chain, oldest first
+      parameters:
+        - { name: subject_kind, in: query, schema: { type: string, enum: [pass_prediction, observation] } }
+        - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 1000 } }
+      responses:
+        "200":
+          description: Receipt summaries in append order
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  node_id: { type: string }
+                  issuer: { type: string }
+                  receipt_kind: { type: string, enum: [state-receipt/1] }
+                  count: { type: integer }
+                  receipts:
+                    type: array
+                    items: { $ref: "#/components/schemas/ReceiptSummary" }
+                required: [node_id, issuer, receipt_kind, count, receipts]
+
+  /receipts/verify:
+    get:
+      summary: Verify the whole chain against the stored records
+      responses:
+        "200":
+          description: Chain verification; an empty chain is consistent
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChainVerification" }
+        "429": { $ref: "#/components/responses/TooMany" }
+
+  /receipts/{receipt_id}:
+    get:
+      summary: One receipt, verified against its record and its predecessor
+      parameters:
+        - { name: receipt_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Verification with the full receipt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReceiptVerification" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /observations:
+    get:
+      summary: Observation summaries
+      parameters:
+        - { name: source, in: query, schema: { type: string } }
+        - { name: norad_id, in: query, schema: { type: integer } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 500 } }
+      responses:
+        "200":
+          description: Summaries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  observations:
+                    type: array
+                    items: { type: object }
+                required: [observations]
+    post:
+      summary: Record one observation, signed and receipted by the node (operator key)
+      description: |
+        The observation id is derived from the node id and the observation's canonical hash.
+        Recording the same observation again returns the stored entry with already_recorded
+        true (200). The node records observations only as itself.
+      security:
+        - OperatorKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                observation: { type: object }
+                source: { type: string, default: local, description: "satnogs, local, or a short connector id" }
+                payload_profile:
+                  type: string
+                  enum: [satnogs.observation.json/1, opaque.json/1, ccsds.omm.json/1, stac.item.json/1, pass-prediction.json/1, state-record.json/1]
+              required: [observation]
+      responses:
+        "201":
+          description: Stored, signed observation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ObservationEntry" }
+        "200":
+          description: Already recorded; the stored entry
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ObservationEntry" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "413":
+          description: Observation larger than 256 KiB
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/OperatorKeyUnset" }
+
+  /observations/ingest:
+    post:
+      summary: Pull observations from the SatNOGS Network and record each (operator key)
+      security:
+        - OperatorKey: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                options:
+                  type: object
+                  properties:
+                    norad_id: { type: integer }
+                    ground_station: { type: integer }
+                    status: { type: string }
+                    limit: { type: integer, default: 10, maximum: 50 }
+                    timeout_ms: { type: integer, description: Clamped to 1000-30000 }
+                    fixture: { type: boolean }
+      responses:
+        "201":
+          description: Ingest result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  node_id: { type: string }
+                  source: { type: string }
+                  observations_origin: { type: string, enum: [live, fixture, unknown] }
+                  filter_applied_upstream: { type: [boolean, "null"] }
+                  ingested_count: { type: integer }
+                  recorded_count: { type: integer }
+                  duplicate_count: { type: integer }
+                  observations:
+                    type: array
+                    items: { $ref: "#/components/schemas/ObservationEntry" }
+                required: [node_id, source, observations_origin, ingested_count, recorded_count, duplicate_count, observations]
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "503": { $ref: "#/components/responses/OperatorKeyUnset" }
+
+  /observations/{observation_id}:
+    get:
+      summary: A stored observation with its record, envelope and receipt
+      parameters:
+        - { name: observation_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Stored observation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ObservationEntry" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /observations/{observation_id}/verify:
+    get:
+      summary: Verify a stored observation's envelope and receipt
+      parameters:
+        - { name: observation_id, in: path, required: true, schema: { type: string } }
+        - { name: expected_signer, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  observation_id: { type: string }
+                  verified: { type: boolean }
+                  signer: { type: string }
+                  envelope: { type: object }
+                  receipt: { type: [object, "null"] }
+                required: [observation_id, verified, signer, envelope]
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooMany" }
+
+  /orbital/passes:
+    get:
+      summary: Passes for any observer, stored and receipted (operator key)
+      security:
+        - OperatorKey: []
+      parameters:
+        - { name: norad_id, in: query, schema: { type: integer, default: 25544 } }
+        - { name: latitude, in: query, schema: { type: number } }
+        - { name: longitude, in: query, schema: { type: number } }
+        - { name: altitude_m, in: query, schema: { type: number, default: 0 } }
+        - { name: hours, in: query, schema: { type: number, default: 24, maximum: 168 } }
+        - { name: min_elevation_deg, in: query, schema: { type: number, default: 10 } }
+        - { name: start, in: query, schema: { type: string, format: date-time } }
+        - { name: fixture, in: query, schema: { type: boolean, default: false } }
+      responses:
+        "200":
+          description: Signed, stored prediction with its receipt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PassPredictionEntry" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "502": { $ref: "#/components/responses/Upstream" }
+        "503": { $ref: "#/components/responses/OperatorKeyUnset" }
+
+  /orbital/passes/history:
+    get:
+      summary: Stored prediction summaries
+      parameters:
+        - { name: norad_id, in: query, schema: { type: integer } }
+        - { name: limit, in: query, schema: { type: integer, default: 20, maximum: 200 } }
+      responses:
+        "200":
+          description: Summaries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  predictions:
+                    type: array
+                    items: { type: object }
+                required: [predictions]
+
+  /orbital/passes/{prediction_id}:
+    get:
+      summary: A stored prediction with envelope and receipt verification
+      parameters:
+        - { name: prediction_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Stored prediction
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/PassPredictionEntry" }
+                  - type: object
+                    properties:
+                      verification: { type: object }
+                      receipt_verification: { type: [object, "null"] }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /orbital/state:
+    get:
+      summary: Propagated state at an instant, with look angles from an observer (operator key)
+      security:
+        - OperatorKey: []
+      parameters:
+        - { name: norad_id, in: query, schema: { type: integer, default: 25544 } }
+        - { name: at, in: query, schema: { type: string, format: date-time } }
+        - { name: latitude, in: query, schema: { type: number } }
+        - { name: longitude, in: query, schema: { type: number } }
+        - { name: altitude_m, in: query, schema: { type: number } }
+        - { name: fixture, in: query, schema: { type: boolean, default: false } }
+      responses:
+        "200":
+          description: Propagated state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  state: { type: object }
+                  elements_origin: { type: string, enum: [live, cache, fixture] }
+                  elements_fetched_at: { type: string, format: date-time }
+                required: [state, elements_origin]
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "503": { $ref: "#/components/responses/OperatorKeyUnset" }
+
+  /envelopes/verify:
+    post:
+      summary: Verify any state-envelope/1 object offline
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - { $ref: "#/components/schemas/SignedEnvelope" }
+                - type: object
+                  properties:
+                    envelope: { $ref: "#/components/schemas/SignedEnvelope" }
+                    payload: {}
+                    expected_signer: { type: string }
+                    allowed_payload_types:
+                      type: array
+                      items: { type: string }
+                  required: [envelope]
+      responses:
+        "200":
+          description: Verification result
+          content:
+            application/json:
+              schema: { type: object }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/TooMany" }
+
+components:
+  securitySchemes:
+    OperatorKey:
+      type: apiKey
+      in: header
+      name: x-operator-key
+
+  responses:
+    BadRequest:
+      description: Invalid input
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Operator key missing or wrong
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Not found, or no bundled elements for the object when fixture=true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unprocessable:
+      description: No declared site, or elements that cannot be propagated to the requested time
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    TooMany:
+      description: Too many requests from this client
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Upstream:
+      description: Live elements unavailable and no bundled fallback
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    OperatorKeyUnset:
+      description: NODE_OPERATOR_KEY is not configured, so write routes are disabled
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+        code:
+          type: string
+          description: Machine-readable reason when one exists (not_this_node, propagation_failed, elements_not_bundled, elements_unavailable, no_declared_site, operator_key_unset)
+        request_id: { type: string }
+      required: [error]
+
+    SignerMode:
+      type: string
+      enum: [configured, ephemeral_dev]
+
+    Site:
+      type: [object, "null"]
+      properties:
+        latitude: { type: number }
+        longitude: { type: number }
+        altitude_m: { type: number }
+
+    NodeIdentity:
+      type: object
+      properties:
+        node_id: { type: string }
+        did: { type: string }
+        key_id: { type: string }
+        key_label: { type: string }
+        algorithm: { type: string, enum: [ed25519] }
+        public_key_multibase: { type: string }
+        public_key_fingerprint: { type: string }
+        signer_mode: { $ref: "#/components/schemas/SignerMode" }
+        durable: { type: boolean }
+        since: { type: string, format: date-time }
+        warning: { type: [string, "null"] }
+      required: [node_id, did, algorithm, public_key_multibase, signer_mode, durable]
+
+    IdentityRecord:
+      type: object
+      description: A canonical entity record with identity_type node and the node's did:key
+      properties:
+        record_type: { type: string, enum: [entity] }
+        entity_id: { type: string }
+        entity_type: { type: string }
+        identity_type: { type: string, enum: [node] }
+        did: { type: string }
+        controller_id: { type: string }
+        display_name: { type: [string, "null"] }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+      required: [record_type, entity_id, entity_type, identity_type, did, created_at]
+
+    AuthorizationRecord:
+      type: object
+      properties:
+        record_type: { type: string, enum: [authorization] }
+        authorization_id: { type: string }
+        subject_id: { type: string }
+        controller_id: { type: string }
+        capability: { type: string, enum: [receive, transmit, command, schedule, publish_data, relay] }
+        scope: { type: [string, "null"] }
+        profile: { type: string, enum: [self_declared, operator_attested, regulator_issued] }
+        jurisdiction: { type: [string, "null"] }
+        location: { type: [object, "null"] }
+        valid_from: { type: string }
+        note: { type: string }
+      required: [record_type, authorization_id, subject_id, controller_id, capability]
+
+    SignedEnvelope:
+      type: object
+      description: state-envelope/1
+      properties:
+        envelope_version: { type: string, enum: [state-envelope/1] }
+        envelope_id: { type: string }
+        envelope_hash: { type: string }
+        payload_type: { type: string }
+        payload_hash: { type: string }
+        payload: {}
+        signer: { type: string }
+        created_at: { type: string, format: date-time }
+        previous_envelope_hash: { type: [string, "null"] }
+        signature:
+          type: object
+          properties:
+            algorithm: { type: string, enum: [ed25519] }
+            key_id: { type: string }
+            value: { type: string }
+      required: [envelope_version, payload_type, payload_hash, signer, created_at, signature]
+
+    ProtocolReceipt:
+      type: object
+      description: state-receipt/1 receipt in the node's append-only chain
+      properties:
+        record_type: { type: string, enum: [receipt] }
+        receipt_version: { type: string, enum: [state-receipt/1] }
+        receipt_id: { type: string }
+        record_hash: { type: string }
+        previous_hash: { type: [string, "null"] }
+        timestamp: { type: string, format: date-time }
+        issuer: { type: string }
+        receipt_hash: { type: string }
+        signature: { type: [string, "null"] }
+        signature_algorithm: { type: string, enum: [ed25519, none] }
+        key_id: { type: [string, "null"] }
+        verification_status: { type: string, enum: [issued, unsigned] }
+      required: [record_type, receipt_version, receipt_id, record_hash, previous_hash, timestamp, issuer, receipt_hash, signature_algorithm]
+
+    PassPredictionEntry:
+      type: object
+      properties:
+        prediction_id: { type: string }
+        node_id: { type: string }
+        computed_by: { type: string }
+        persisted: { type: boolean }
+        elements_origin: { type: string, enum: [live, cache, fixture] }
+        prediction:
+          type: object
+          properties:
+            norad_cat_id: { type: integer }
+            object_name: { type: [string, "null"] }
+            observer_id: { type: [string, "null"], description: The node whose declared site was used; null for an ad-hoc observer }
+            observer_source: { type: string, enum: [node_declared_site, request] }
+            computed_by: { type: string }
+            observer: { type: object }
+            window_start: { type: string, format: date-time }
+            window_end: { type: string, format: date-time }
+            min_elevation_deg: { type: number }
+            elements_epoch: { type: string }
+            elements_hash: { type: string }
+            elements_age_hours: { type: number }
+            propagator: { type: string }
+            pass_count: { type: integer }
+            truncated_by_propagation_error: { type: boolean }
+            propagation_error: { type: object }
+            passes:
+              type: array
+              items:
+                type: object
+                properties:
+                  aos: { type: string, format: date-time }
+                  tca: { type: string, format: date-time }
+                  los: { type: string, format: date-time }
+                  duration_seconds: { type: number }
+                  max_elevation_deg: { type: number }
+                  aos_azimuth_deg: { type: number }
+                  tca_azimuth_deg: { type: number }
+                  los_azimuth_deg: { type: number }
+                  tca_range_km: { type: number }
+                  truncated_at_window_start: { type: boolean }
+                  truncated_at_window_end: { type: boolean }
+            omm: { type: object, description: "The CCSDS OMM the prediction was computed from, unchanged" }
+          required: [norad_cat_id, window_start, window_end, pass_count, passes, elements_hash, propagator]
+        envelope: { $ref: "#/components/schemas/SignedEnvelope" }
+        receipt:
+          description: Issued only when the prediction is stored (operator route); null otherwise
+          oneOf:
+            - { $ref: "#/components/schemas/ProtocolReceipt" }
+            - { type: "null" }
+        created_at: { type: string, format: date-time }
+      required: [prediction_id, node_id, computed_by, persisted, elements_origin, prediction, envelope, receipt]
+
+    ObservationEntry:
+      type: object
+      properties:
+        observation_id: { type: string }
+        node_id: { type: string }
+        source: { type: string }
+        norad_cat_id: { type: [integer, "null"] }
+        observed_at: { type: [string, "null"] }
+        payload_profile: { type: string }
+        payload_hash: { type: string }
+        record: { type: object, description: Canonical measurement record carrying the observation unchanged in value }
+        envelope: { $ref: "#/components/schemas/SignedEnvelope" }
+        receipt: { $ref: "#/components/schemas/ProtocolReceipt" }
+        already_recorded: { type: boolean }
+        created_at: { type: string, format: date-time }
+      required: [observation_id, node_id, source, payload_profile, payload_hash, record, envelope, receipt]
+
+    ReceiptSummary:
+      type: object
+      properties:
+        receipt_id: { type: string }
+        node_id: { type: string }
+        subject_kind: { type: string, enum: [pass_prediction, observation] }
+        subject_id: { type: string }
+        record_hash: { type: string }
+        previous_hash: { type: [string, "null"] }
+        receipt_hash: { type: string }
+        issuer: { type: string }
+        timestamp: { type: string, format: date-time }
+        sequence: { type: integer }
+      required: [receipt_id, node_id, subject_kind, subject_id, record_hash, previous_hash, receipt_hash, issuer, timestamp, sequence]
+
+    ReceiptVerification:
+      type: object
+      properties:
+        verified: { type: boolean }
+        receipt_id: { type: string }
+        receipt_kind: { type: string, enum: [state-receipt/1] }
+        node_id: { type: string }
+        subject_kind: { type: string }
+        subject_id: { type: string }
+        previous_receipt_id: { type: [string, "null"] }
+        issuer_is_current_identity: { type: boolean }
+        errors:
+          type: array
+          items: { type: string }
+        checks:
+          type: array
+          items: { type: string }
+        receipt: { $ref: "#/components/schemas/ProtocolReceipt" }
+      required: [verified, receipt_id, receipt_kind, node_id, subject_kind, subject_id, errors, checks, receipt]
+
+    ChainVerification:
+      type: object
+      properties:
+        node_id: { type: string }
+        expected_issuer: { type: string }
+        length: { type: integer }
+        verified: { type: boolean }
+        errors:
+          type: array
+          items: { type: string }
+        receipts_failed:
+          type: array
+          items: { type: string }
+        records_verified: { type: integer }
+        head:
+          oneOf:
+            - { $ref: "#/components/schemas/ReceiptSummary" }
+            - { type: "null" }
+      required: [node_id, expected_issuer, length, verified, errors, receipts_failed, records_verified, head]
