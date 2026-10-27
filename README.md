@@ -95,4 +95,4 @@ docker build -t space-node . && docker run -p 3100:3100 -v node-data:/data -e NO
 
 The package exports its modules for an operated stack that embeds a node: `@iricity/space-node/orbital` (SGP4 pass search), `@iricity/space-node/connectors/celestrak` and `/connectors/satnogs`, `@iricity/space-node/store` (`createNodeStore({ ensureDb, persistDb })` binds the node tables to any sql.js database), `/identity`, `/agent`, `/node`.
 
-Documentation: [docs/RUN_YOUR_OWN_NODE.md](docs/RUN_YOUR_OWN_NODE.md), [docs/TWO_NODES.md](docs/TWO_NODES.md), [docs/NODE_AGENT.md](docs/NODE_AGENT.md), [docs/ORBIT_SERVICE.md](docs/ORBIT_SERVICE.md), [docs/openapi.yaml](docs/openapi.yaml).
+Documentation: [docs/RUN_YOUR_OWN_NODE.md](docs/RUN_YOUR_OWN_NODE.md), [docs/FIRST_OPERATOR.md](docs/FIRST_OPERATOR.md), [docs/TWO_NODES.md](docs/TWO_NODES.md), [docs/NODE_AGENT.md](docs/NODE_AGENT.md), [docs/ORBIT_SERVICE.md](docs/ORBIT_SERVICE.md), [docs/openapi.yaml](docs/openapi.yaml).
