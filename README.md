@@ -86,4 +86,12 @@ npm run lint:openapi     # docs/openapi.yaml
 docker build -t space-node . && docker run -p 3100:3100 -v node-data:/data -e NODE_SIGNING_PRIVATE_KEY=... -e NODE_OPERATOR_KEY=... space-node
 ```
 
-Documentation: [docs/RUN_YOUR_OWN_NODE.md](docs/RUN_YOUR_OWN_NODE.md), [docs/NODE_AGENT.md](docs/NODE_AGENT.md), [docs/ORBIT_SERVICE.md](docs/ORBIT_SERVICE.md), [docs/openapi.yaml](docs/openapi.yaml).
+## Two nodes
+
+`npm run demo:two-nodes` starts two nodes with their own keys and sites, has each verify the other's objects offline, and with `-- --registry <url>` hands both to a reference registry that receipts them into one chain. See [docs/TWO_NODES.md](docs/TWO_NODES.md).
+
+## Use as a library
+
+The package exports its modules for an operated stack that embeds a node: `@iricity/space-node/orbital` (SGP4 pass search), `@iricity/space-node/connectors/celestrak` and `/connectors/satnogs`, `@iricity/space-node/store` (`createNodeStore({ ensureDb, persistDb })` binds the node tables to any sql.js database), `/identity`, `/agent`, `/node`.
+
+Documentation: [docs/RUN_YOUR_OWN_NODE.md](docs/RUN_YOUR_OWN_NODE.md), [docs/TWO_NODES.md](docs/TWO_NODES.md), [docs/NODE_AGENT.md](docs/NODE_AGENT.md), [docs/ORBIT_SERVICE.md](docs/ORBIT_SERVICE.md), [docs/openapi.yaml](docs/openapi.yaml).

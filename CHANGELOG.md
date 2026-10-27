@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0 - 2026-10-27
+
+- Two-node demonstration (`npm run demo:two-nodes`, `docs/TWO_NODES.md`): two nodes with their own keys verify each other's objects offline and, with `--registry`, through the reference registry; covered by a test.
+- Library exports: `./orbital`, `./connectors/celestrak`, `./connectors/satnogs`, `./store`, `./identity`, `./agent`, `./node`; `createNodeStore({ ensureDb, persistDb })` binds the node tables to any sql.js database so an operated stack can embed the node without copying it.
+- Vendored `@iricity/frontier-shared` 0.4.0.
+
 ## 0.1.0 - 2026-10-21
 
 First release of the reference node as its own repository, carved out of the operated space stack.
