@@ -24,6 +24,7 @@ export const NODE_SIGNING_KEY_LABEL = env.NODE_SIGNING_KEY_LABEL || "node_key_v1
 export const NODE_OPERATOR_KEY = env.NODE_OPERATOR_KEY || "";
 
 export const NODE_DATA_DIR = env.NODE_DATA_DIR || "data";
+export const NODE_PUBLIC_URL = env.NODE_PUBLIC_URL || "";
 export const PORT = number("PORT", 3100);
 export const HOST = env.HOST || "0.0.0.0";
 

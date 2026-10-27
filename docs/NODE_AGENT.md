@@ -17,6 +17,10 @@ The node describes itself from `node.json` (path in `NODE_MANIFEST_PATH`) or fro
 
 The node signs only as itself. It computes passes over its declared site (`observer_id` is its own id, `observer_source: "node_declared_site"`) or over an observer given in the request (`observer_id: null`, `observer_source: "request"`), and in both cases `computed_by` names this node and the envelope is signed by it. It records observations only as itself: a `node_id` in the body that is not its own is refused with `400` (`not_this_node`).
 
+## Discovery
+
+`GET /.well-known/frontier-node.json` returns the node's descriptor (`node-descriptor.json/1`): id, DID, operator, jurisdiction, site, endpoints, protocol versions and authorizations, in a `state-envelope/1` envelope signed by the node. Set `NODE_PUBLIC_URL` so the endpoints are absolute. A registry discovers the node by fetching this one document and verifying it against the DID it names; nothing more is standardized (ADR 0007 in the specification repository).
+
 ## Authorizations
 
 `GET /authorizations` returns machine-readable, self-declared authorization records:

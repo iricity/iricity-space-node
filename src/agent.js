@@ -15,8 +15,10 @@ import { PAYLOAD_PROFILES, createAuthorizationRecord, hashPayload, verifyReceipt
 import { assertObserver, assertWindowHours, parseInstant, predictPasses } from "./orbital/propagation.js";
 import { clampTimeoutMs, resolveOmm } from "./connectors/celestrak.js";
 import { fetchSatnogsObservations } from "./connectors/satnogs.js";
-import { buildNodeIdentityRecord, getNodeIdentity, issueNodeReceipt, signNodePayload } from "./identity.js";
+import { buildNodeIdentityRecord, getNodeIdentity, getNodeSigner, issueNodeReceipt, signNodePayload } from "./identity.js";
 import { getNodeDescription } from "./node.js";
+import { NODE_PUBLIC_URL } from "./config.js";
+import { buildNodeDescriptor, signNodeDescriptor } from "./descriptor.js";
 import {
   getLatestNodeReceiptHash,
   getLatestObservationEnvelopeHash,
@@ -73,6 +75,21 @@ export function describeNode() {
     site: node.site,
     description_source: node.source
   };
+}
+
+/** The node's signed descriptor, for /.well-known/frontier-node.json. */
+export function nodeDescriptorEnvelope({ publicUrl = NODE_PUBLIC_URL || null, generatedAt } = {}) {
+  const node = getNodeDescription();
+  const identity = getNodeIdentity();
+  const descriptor = buildNodeDescriptor({
+    node,
+    did: identity.did,
+    publicUrl,
+    authorizations: buildNodeAuthorizations(),
+    profiles: [PAYLOAD_PROFILES.PASS_PREDICTION, PAYLOAD_PROFILES.SATNOGS_OBSERVATION, PAYLOAD_PROFILES.OPAQUE_JSON, PAYLOAD_PROFILES.STATE_RECORD],
+    generatedAt
+  });
+  return signNodeDescriptor(descriptor, getNodeSigner());
 }
 
 /** Deterministic id over everything that changes the answer: who, where, which elements, which window. */

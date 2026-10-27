@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0 - 2026-10-27
+
+- Discovery: `GET /.well-known/frontier-node.json` serves the node's signed descriptor (`node-descriptor.json/1`); `NODE_PUBLIC_URL` makes its endpoints absolute. `@iricity/space-node/descriptor` exports the pure builder for operated stacks. The two-node demonstration discovers both nodes into the registry and anchors nothing new; registry anchoring lives in the registry.
+- Vendored `@iricity/frontier-shared` 0.5.0 (vectors version 3; profile ids for descriptors and chain heads).
+
 ## 0.2.0 - 2026-10-27
 
 - Two-node demonstration (`npm run demo:two-nodes`, `docs/TWO_NODES.md`): two nodes with their own keys verify each other's objects offline and, with `--registry`, through the reference registry; covered by a test.

@@ -131,6 +131,9 @@ export async function runTwoNodesDemo({ registryUrl = process.env.REGISTRY_URL |
     check("A publishes a durable did:key identity", identityA.identity.did === a.did && identityA.identity.durable);
     check("B publishes a durable did:key identity", identityB.identity.did === b.did && identityB.identity.durable);
     check("identities differ", a.did !== b.did);
+    const descriptorA = await json(`${a.base}/.well-known/frontier-node.json`);
+    const descriptorCheck = verifyEnvelope(descriptorA, { expected_signer: a.did, allowed_payload_types: ["node-descriptor.json/1"] });
+    check("A's signed descriptor verifies against A's DID", descriptorCheck.verified && descriptorA.payload.node_id === a.id, descriptorCheck.errors.join("; "));
 
     // 2. A produces: one observation (receipted) and one pass prediction (signed, not kept).
     const observationA = await post(a, "/observations", { observation: FIXTURE[0], source: "satnogs" });
@@ -188,6 +191,12 @@ export async function runTwoNodesDemo({ registryUrl = process.env.REGISTRY_URL |
         forgedRejected = true;
       }
       check("registry refuses A's observation re-labelled as B's", forgedRejected);
+      const discoveredA = await json(`${base}/demo/nodes/discover`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: a.base }) });
+      const discoveredB = await json(`${base}/demo/nodes/discover`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: b.base }) });
+      check("registry discovered A from its descriptor", discoveredA.node?.did === a.did);
+      check("registry discovered B from its descriptor", discoveredB.node?.did === b.did);
+      const directory = await json(`${base}/demo/nodes`);
+      check("registry directory lists both nodes", directory.nodes.length === 2);
       registry = { url: base, did: registryIdentity.did, receipts: { a: ingestA.receipt.receipt_id, b: ingestB.receipt.receipt_id }, chain_length: chain.length };
     }
   } finally {

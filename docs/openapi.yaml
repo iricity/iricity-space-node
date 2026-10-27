@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Space Node API
-  version: 0.1.0
+  version: 0.3.0
   description: |
     The reference node of the Frontier State Protocol. One operator-controlled process
     with a did:key identity, a declared site, self-declared authorizations, and a stream
@@ -76,6 +76,16 @@ paths:
           content:
             application/yaml:
               schema: { type: string }
+
+  /.well-known/frontier-node.json:
+    get:
+      summary: The node's signed descriptor (node-descriptor.json/1), the document a registry fetches to discover this node
+      responses:
+        "200":
+          description: A state-envelope/1 envelope whose signer equals the descriptor's did
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SignedEnvelope" }
 
   /identity:
     get:

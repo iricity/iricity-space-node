@@ -61,6 +61,16 @@ test("the node describes itself: did:key identity, identity record, self-declare
     assert.match(authorization.authorization_id, /^auth_[0-9a-f]{24}$/);
   }
 
+  const descriptor = await app.inject({ method: "GET", url: "/.well-known/frontier-node.json" });
+  assert.equal(descriptor.statusCode, 200);
+  const envelope = descriptor.json();
+  assert.equal(envelope.payload_type, "node-descriptor.json/1");
+  assert.equal(envelope.payload.node_id, "node_test_delhi");
+  assert.equal(envelope.payload.did, getNodeIdentity().did);
+  assert.equal(envelope.payload.endpoints.passes, "/passes", "relative endpoints without NODE_PUBLIC_URL");
+  assert.equal(envelope.payload.authorizations.length, 2);
+  assert.equal(verifyEnvelope(envelope, { expected_signer: getNodeIdentity().did, allowed_payload_types: ["node-descriptor.json/1"] }).verified, true);
+
   const spec = await app.inject({ method: "GET", url: "/openapi.yaml" });
   assert.equal(spec.statusCode, 200);
   assert.match(spec.body, /openapi: 3\.1\.0/);

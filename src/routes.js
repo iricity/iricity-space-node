@@ -8,6 +8,7 @@ import {
   describeNode,
   ingestSatnogsObservations,
   listNodeReceiptSummaries,
+  nodeDescriptorEnvelope,
   predictNodePasses,
   recordObservation,
   verifyNodeReceipt,
@@ -82,6 +83,7 @@ export const ENDPOINTS = {
   orbital_pass: "GET /orbital/passes/:prediction_id",
   orbital_state: "GET /orbital/state?norad_id=25544&at=.. (operator key)",
   envelopes_verify: "POST /envelopes/verify",
+  descriptor: "GET /.well-known/frontier-node.json",
   openapi: "GET /openapi.yaml"
 };
 
@@ -124,6 +126,9 @@ export default async function routes(app) {
 
   // Identity and authorizations: public, this is what discovery reads.
   app.get("/identity", async () => ({ version: "v1", ...describeNode() }));
+
+  // The signed descriptor: one document a registry fetches to learn this node.
+  app.get("/.well-known/frontier-node.json", async () => nodeDescriptorEnvelope());
 
   app.get("/authorizations", async () => {
     const node = describeNode();

@@ -48,6 +48,7 @@ The full walkthrough, including what each setting means and how to check a node 
 | `GET /orbital/passes/history`, `/orbital/passes/:id` | public | stored predictions and their verification |
 | `GET /orbital/state?norad_id=&at=` | operator key | propagated position and look angles |
 | `POST /envelopes/verify` | public, rate limited | verify any envelope from any node |
+| `GET /.well-known/frontier-node.json` | public | the signed descriptor a registry fetches to discover this node |
 | `GET /health`, `GET /openapi.yaml`, `GET /` | public | liveness, the API document, the endpoint index |
 
 Input errors are `400`; elements that cannot be propagated (decayed objects) are `422`; an object with no bundled elements when `fixture=true` is `404`; upstream failure with no fallback is `502`. Faults are logged and answered with a generic `500`.
