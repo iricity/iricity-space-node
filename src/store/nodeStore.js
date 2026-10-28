@@ -32,6 +32,24 @@ export class ChainConflictError extends Error {
   }
 }
 
+const CHAIN_WRITE_ATTEMPTS = 10;
+
+/**
+ * Read the chain head, sign against it, write: `attempt` does all three. If another
+ * writer extended the chain in between, the store refuses the write with a
+ * ChainConflictError; re-read the head and sign again.
+ */
+export async function extendChain(attempt, { attempts = CHAIN_WRITE_ATTEMPTS } = {}) {
+  for (let tries = 1; ; tries += 1) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (!(error instanceof ChainConflictError) || tries >= attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * 20 * tries)));
+    }
+  }
+}
+
 function parseJson(value, fallback = null) {
   try {
     return value ? JSON.parse(value) : fallback;

@@ -20,7 +20,7 @@ import { getNodeDescription } from "./node.js";
 import { NODE_PUBLIC_URL } from "./config.js";
 import { buildNodeDescriptor, signNodeDescriptor } from "./descriptor.js";
 import {
-  ChainConflictError,
+  extendChain,
   getLatestNodeReceiptHash,
   getLatestObservationEnvelopeHash,
   getNodeReceiptByHash,
@@ -34,23 +34,6 @@ import {
 
 const SATNOGS_REQUIRED = ["id", "start", "ground_station", "norad_cat_id"];
 const MAX_OBSERVATION_BYTES = 256 * 1024;
-const CHAIN_WRITE_ATTEMPTS = 10;
-
-/**
- * Read the chain head, sign against it, write. If another writer extended the chain
- * in between, the store refuses the write; re-read the head and sign again.
- */
-async function extendChain(attempt) {
-  for (let tries = 1; ; tries += 1) {
-    try {
-      return await attempt();
-    } catch (error) {
-      if (!(error instanceof ChainConflictError) || tries >= CHAIN_WRITE_ATTEMPTS) throw error;
-      await new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * 20 * tries)));
-    }
-  }
-}
-
 function clientError(message, status = 400, code = undefined) {
   return Object.assign(new Error(message), { status, ...(code ? { code } : {}) });
 }
