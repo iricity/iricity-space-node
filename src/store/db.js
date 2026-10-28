@@ -2,6 +2,9 @@
  * One SQLite file under NODE_DATA_DIR, through sql.js (no native build). The whole
  * database is written back after every change; node volumes are small (receipts,
  * observations, stored predictions) and this keeps the store portable.
+ *
+ * `ensureDb()` returns the database interface from ./database.js, the same one an
+ * operated stack passes to `createNodeStore` for a hosted database.
  */
 
 import fs from "node:fs";
@@ -9,6 +12,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import initSqlJs from "sql.js";
 import { NODE_DATA_DIR } from "../config.js";
+import { wrapSqlJsDatabase } from "./database.js";
 
 const require = createRequire(import.meta.url);
 let sqlModulePromise = null;
@@ -32,7 +36,7 @@ export async function ensureDb() {
       const file = dbPath();
       fs.mkdirSync(path.dirname(file), { recursive: true });
       const db = fs.existsSync(file) ? new SQL.Database(fs.readFileSync(file)) : new SQL.Database();
-      return db;
+      return wrapSqlJsDatabase(db);
     })();
   }
   return dbPromise;

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0 - 2026-10-28
+
+- The store speaks one asynchronous database interface (`@iricity/space-node/database`) with two adapters: `wrapSqlJsDatabase` for the node's own SQLite file and `wrapLibsqlClient` for libSQL, a SQLite database shared across processes such as Turso. An operated stack can keep the node tables in a hosted database.
+- Breaking for embedders: `createNodeStore({ ensureDb, persistDb })` now expects `ensureDb()` to return that interface, not a raw sql.js database. Wrap it with `wrapSqlJsDatabase(db)`.
+- Chain integrity under concurrency. A unique index allows one receipt per predecessor and one observation envelope per predecessor, so two writers that read the same chain head cannot both extend it. The losing writer re-reads the head and signs again. Each object and its receipt are written in one atomic batch. Recording the same observation concurrently still stores it once.
+- Databases written by earlier versions gain the new column and indexes on first use; if an existing fork prevents an index, `chainGuards()` reports it instead of refusing to start.
+
 ## 0.4.1 - 2026-10-28
 
 - First release through the trusted publisher, with provenance. No code change.

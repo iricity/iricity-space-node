@@ -20,6 +20,7 @@ import { getNodeDescription } from "./node.js";
 import { NODE_PUBLIC_URL } from "./config.js";
 import { buildNodeDescriptor, signNodeDescriptor } from "./descriptor.js";
 import {
+  ChainConflictError,
   getLatestNodeReceiptHash,
   getLatestObservationEnvelopeHash,
   getNodeReceiptByHash,
@@ -27,13 +28,28 @@ import {
   getNodeReceiptSubjectRecord,
   getObservationById,
   listNodeReceipts,
-  saveNodeReceipt,
-  saveObservation,
-  savePassPrediction
+  saveObservationWithReceipt,
+  savePassPredictionWithReceipt
 } from "./store/nodeStore.js";
 
 const SATNOGS_REQUIRED = ["id", "start", "ground_station", "norad_cat_id"];
 const MAX_OBSERVATION_BYTES = 256 * 1024;
+const CHAIN_WRITE_ATTEMPTS = 10;
+
+/**
+ * Read the chain head, sign against it, write. If another writer extended the chain
+ * in between, the store refuses the write; re-read the head and sign again.
+ */
+async function extendChain(attempt) {
+  for (let tries = 1; ; tries += 1) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (!(error instanceof ChainConflictError) || tries >= CHAIN_WRITE_ATTEMPTS) throw error;
+      await new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * 20 * tries)));
+    }
+  }
+}
 
 function clientError(message, status = 400, code = undefined) {
   return Object.assign(new Error(message), { status, ...(code ? { code } : {}) });
@@ -157,10 +173,11 @@ export async function predictNodePasses({ norad_id, hours, max_hours, min_elevat
   };
 
   if (persist) {
-    entry.receipt = issueNodeReceipt({ record: payload, previous_hash: await getLatestNodeReceiptHash(node.node_id) });
+    await extendChain(async () => {
+      entry.receipt = issueNodeReceipt({ record: payload, previous_hash: await getLatestNodeReceiptHash(node.node_id) });
+      await savePassPredictionWithReceipt(entry, { node_id: node.node_id, created_at: entry.created_at });
+    });
     entry.persisted = true;
-    await savePassPrediction(entry);
-    await saveNodeReceipt({ node_id: node.node_id, subject_kind: "pass_prediction", subject_id: entry.prediction_id, receipt: entry.receipt, created_at: entry.created_at });
   }
   return entry;
 }
@@ -235,9 +252,6 @@ export async function recordObservation({ observation, source = "local", payload
     recorded_by: node.node_id
   };
 
-  const previousEnvelopeHash = await getLatestObservationEnvelopeHash(node.node_id);
-  const envelope = signNodePayload(record, PAYLOAD_PROFILES.STATE_RECORD, { previous_envelope_hash: previousEnvelopeHash });
-  const receipt = issueNodeReceipt({ record, previous_hash: await getLatestNodeReceiptHash(node.node_id) });
   const entry = {
     observation_id: observationId,
     node_id: node.node_id,
@@ -247,13 +261,23 @@ export async function recordObservation({ observation, source = "local", payload
     payload_profile: profile,
     payload_hash: payloadHash,
     record,
-    envelope,
-    receipt,
+    envelope: null,
+    receipt: null,
     created_at: recordedAt
   };
 
-  await saveObservation(entry);
-  await saveNodeReceipt({ node_id: node.node_id, subject_kind: "observation", subject_id: observationId, receipt, created_at: recordedAt });
+  try {
+    await extendChain(async () => {
+      entry.envelope = signNodePayload(record, PAYLOAD_PROFILES.STATE_RECORD, { previous_envelope_hash: await getLatestObservationEnvelopeHash(node.node_id) });
+      entry.receipt = issueNodeReceipt({ record, previous_hash: await getLatestNodeReceiptHash(node.node_id) });
+      await saveObservationWithReceipt(entry, { node_id: node.node_id, created_at: recordedAt });
+    });
+  } catch (error) {
+    // A concurrent request recorded the same observation first.
+    const stored = await getObservationById(observationId);
+    if (stored) return { ...stored, already_recorded: true };
+    throw error;
+  }
   return { ...entry, already_recorded: false };
 }
 

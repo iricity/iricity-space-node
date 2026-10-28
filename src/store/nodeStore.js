@@ -2,26 +2,34 @@
  * Persistence for node objects: signed pass predictions, signed observations and
  * the node's receipt chain.
  *
- * `createNodeStore({ ensureDb, persistDb })` binds the store to any sql.js
- * database provider, so an operated stack can keep these tables inside its own
- * database. The default export binds to this package's own SQLite file. Tables
- * are created on first use so they coexist with any existing schema.
+ * `createNodeStore({ ensureDb, persistDb })` binds the store to any database that
+ * implements the interface in ./database.js (sql.js in process, or libSQL shared
+ * across processes), so an operated stack can keep these tables in its own
+ * database. The default export binds to this package's own SQLite file. Tables are
+ * created on first use so they coexist with any existing schema.
  *
- * Node receipts are `state-receipt/1` records in their own table and chain.
- * Every list that feeds a chain orders by `rowid`, the append order, so two rows
- * written in the same millisecond cannot swap places.
+ * Chain integrity under concurrency: a unique index allows one receipt per
+ * predecessor and one observation envelope per predecessor, so two writers that
+ * read the same chain head cannot both extend it. The loser gets a
+ * ChainConflictError and re-reads the head (see agent.js). Each object and its
+ * receipt are written in one atomic batch, so a receipt never exists without its
+ * subject.
+ *
+ * Every list that feeds a chain orders by `rowid`, the append order.
  */
 
 import * as defaultDb from "./db.js";
+import { isUniqueViolation } from "./database.js";
 
 export const NODE_RECEIPT_SUBJECTS = ["pass_prediction", "observation"];
 
-function getRows(db, sql, params = []) {
-  const stmt = db.prepare(sql, params);
-  const rows = [];
-  while (stmt.step()) rows.push(stmt.get());
-  stmt.free();
-  return rows;
+export class ChainConflictError extends Error {
+  constructor(message, cause) {
+    super(message);
+    this.name = "ChainConflictError";
+    this.code = "chain_conflict";
+    this.cause = cause;
+  }
 }
 
 function parseJson(value, fallback = null) {
@@ -85,6 +93,16 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS node_receipts_hash_idx ON node_receipts (receipt_hash);
 `;
 
+// Added after the first release; older databases gain them on first use.
+const MIGRATIONS = ["ALTER TABLE observations ADD COLUMN previous_envelope_hash TEXT"];
+
+// One successor per predecessor. Genesis is stored as '' so it is unique too; rows
+// written before this guard have NULL and are left alone.
+const CHAIN_GUARDS = [
+  "CREATE UNIQUE INDEX IF NOT EXISTS node_receipts_chain_guard ON node_receipts (node_id, COALESCE(previous_hash, ''))",
+  "CREATE UNIQUE INDEX IF NOT EXISTS observations_chain_guard ON observations (node_id, previous_envelope_hash) WHERE previous_envelope_hash IS NOT NULL"
+];
+
 const PREDICTION_COLUMNS = `prediction_id, node_id, norad_cat_id, elements_epoch, elements_origin, window_start, window_end,
   pass_count, prediction_json, envelope_json, receipt_json, created_at`;
 const OBSERVATION_COLUMNS = `observation_id, node_id, source, norad_cat_id, observed_at, payload_profile, payload_hash, envelope_hash, signer,
@@ -110,35 +128,103 @@ function mapObservation(row) {
 function mapNodeReceipt(row) {
   return {
     receipt_id: row[0], node_id: row[1], subject_kind: row[2], subject_id: row[3], record_hash: row[4], previous_hash: row[5],
-    receipt_hash: row[6], issuer: row[7], timestamp: row[8], receipt: parseJson(row[9], null), created_at: row[10], sequence: row[11]
+    receipt_hash: row[6], issuer: row[7], timestamp: row[8], receipt: parseJson(row[9], null), created_at: row[10], sequence: Number(row[11])
+  };
+}
+
+function predictionInsert(entry, verb = "INSERT OR REPLACE") {
+  return {
+    sql: `${verb} INTO pass_predictions (${PREDICTION_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    params: [
+      entry.prediction_id, entry.node_id, entry.prediction.norad_cat_id, entry.prediction.elements_epoch, entry.elements_origin,
+      entry.prediction.window_start, entry.prediction.window_end, entry.prediction.pass_count,
+      JSON.stringify(entry.prediction), JSON.stringify(entry.envelope), entry.receipt ? JSON.stringify(entry.receipt) : null, entry.created_at
+    ]
+  };
+}
+
+function observationInsert(entry) {
+  return {
+    sql: `INSERT INTO observations (${OBSERVATION_COLUMNS}, previous_envelope_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    params: [
+      entry.observation_id, entry.node_id, entry.source, entry.norad_cat_id ?? null, entry.observed_at ?? null, entry.payload_profile,
+      entry.payload_hash, entry.envelope.envelope_hash, entry.envelope.signer,
+      JSON.stringify(entry.record), JSON.stringify(entry.envelope), entry.receipt ? JSON.stringify(entry.receipt) : null, entry.created_at,
+      entry.envelope.previous_envelope_hash ?? ""
+    ]
+  };
+}
+
+function receiptInsert({ node_id, subject_kind, subject_id, receipt, created_at }) {
+  if (!NODE_RECEIPT_SUBJECTS.includes(subject_kind)) throw new TypeError(`unknown node receipt subject: ${subject_kind}`);
+  return {
+    sql: `INSERT INTO node_receipts (receipt_id, node_id, subject_kind, subject_id, record_hash, previous_hash, receipt_hash, issuer, timestamp, receipt_json, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    params: [receipt.receipt_id, node_id, subject_kind, subject_id, receipt.record_hash, receipt.previous_hash ?? null, receipt.receipt_hash, receipt.issuer, receipt.timestamp, JSON.stringify(receipt), created_at ?? new Date().toISOString()]
   };
 }
 
 /** Bind the node store to a database provider: `{ ensureDb(): Promise<Database>, persistDb(): Promise<void> }`. */
 export function createNodeStore({ ensureDb, persistDb }) {
   if (typeof ensureDb !== "function" || typeof persistDb !== "function") throw new TypeError("createNodeStore needs ensureDb and persistDb");
-  const prepared = new WeakSet();
+  const prepared = new WeakMap();
 
   async function dbWithTables() {
     const db = await ensureDb();
     if (!prepared.has(db)) {
-      db.run(SCHEMA);
-      prepared.add(db);
+      await db.exec(SCHEMA);
+      for (const sql of MIGRATIONS) {
+        try { await db.exec(sql); } catch { /* column already present */ }
+      }
+      const guards = [];
+      for (const sql of CHAIN_GUARDS) {
+        try {
+          await db.exec(sql);
+          guards.push({ index: sql.split(" ")[6], active: true });
+        } catch (error) {
+          // An existing fork prevents the index; report it rather than refuse to start.
+          guards.push({ index: sql.split(" ")[6], active: false, reason: error?.message || String(error) });
+        }
+      }
+      prepared.set(db, guards);
     }
     return db;
   }
 
-  async function savePassPrediction(entry) {
+  async function write(statements) {
     const db = await dbWithTables();
-    db.run(
-      `INSERT OR REPLACE INTO pass_predictions (${PREDICTION_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        entry.prediction_id, entry.node_id, entry.prediction.norad_cat_id, entry.prediction.elements_epoch, entry.elements_origin,
-        entry.prediction.window_start, entry.prediction.window_end, entry.prediction.pass_count,
-        JSON.stringify(entry.prediction), JSON.stringify(entry.envelope), entry.receipt ? JSON.stringify(entry.receipt) : null, entry.created_at
-      ]
-    );
+    try {
+      await db.batch(statements);
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        // Primary-key duplicates (the same object twice) are not chain conflicts.
+        const message = String(error?.message || "");
+        if (/chain_guard|previous_hash|previous_envelope_hash/i.test(message)) {
+          throw new ChainConflictError("another writer extended the chain first", error);
+        }
+      }
+      throw error;
+    }
     await persistDb();
+  }
+
+  async function chainGuards() {
+    const db = await ensureDb();
+    await dbWithTables();
+    return prepared.get(db) || [];
+  }
+
+  async function savePassPrediction(entry) {
+    await write([predictionInsert(entry)]);
+    return entry;
+  }
+
+  /** A stored prediction and its receipt, atomically. */
+  async function savePassPredictionWithReceipt(entry, { node_id, created_at }) {
+    await write([
+      predictionInsert(entry),
+      receiptInsert({ node_id, subject_kind: "pass_prediction", subject_id: entry.prediction_id, receipt: entry.receipt, created_at })
+    ]);
     return entry;
   }
 
@@ -149,28 +235,29 @@ export function createNodeStore({ ensureDb, persistDb }) {
     if (filters.node_id) { where.push("node_id = ?"); params.push(String(filters.node_id)); }
     if (filters.norad_cat_id) { where.push("norad_cat_id = ?"); params.push(Number(filters.norad_cat_id)); }
     const limit = clampLimit(filters.limit, 20, 200);
-    return getRows(db, `SELECT ${PREDICTION_COLUMNS} FROM pass_predictions ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC, rowid DESC LIMIT ${limit}`, params).map(mapPrediction);
+    return (await db.all(`SELECT ${PREDICTION_COLUMNS} FROM pass_predictions ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC, rowid DESC LIMIT ${limit}`, params)).map(mapPrediction);
   }
 
   async function getPassPredictionById(predictionId) {
     const db = await dbWithTables();
-    const rows = getRows(db, `SELECT ${PREDICTION_COLUMNS} FROM pass_predictions WHERE prediction_id = ? LIMIT 1`, [String(predictionId)]);
+    const rows = await db.all(`SELECT ${PREDICTION_COLUMNS} FROM pass_predictions WHERE prediction_id = ? LIMIT 1`, [String(predictionId)]);
     return rows.length ? mapPrediction(rows[0]) : null;
   }
 
+  /**
+   * An observation and its receipt, atomically. A repeated observation id is not a
+   * chain conflict; the caller checks for it and returns the stored entry.
+   */
+  async function saveObservationWithReceipt(entry, { node_id, created_at }) {
+    await write([
+      observationInsert(entry),
+      receiptInsert({ node_id, subject_kind: "observation", subject_id: entry.observation_id, receipt: entry.receipt, created_at })
+    ]);
+    return entry;
+  }
+
   async function saveObservation(entry) {
-    const db = await dbWithTables();
-    // Plain INSERT: a repeat is answered with the stored entry by the agent, never by
-    // rewriting the row, which would orphan every envelope chained to the original.
-    db.run(
-      `INSERT INTO observations (${OBSERVATION_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        entry.observation_id, entry.node_id, entry.source, entry.norad_cat_id ?? null, entry.observed_at ?? null, entry.payload_profile,
-        entry.payload_hash, entry.envelope.envelope_hash, entry.envelope.signer,
-        JSON.stringify(entry.record), JSON.stringify(entry.envelope), entry.receipt ? JSON.stringify(entry.receipt) : null, entry.created_at
-      ]
-    );
-    await persistDb();
+    await write([observationInsert(entry)]);
     return entry;
   }
 
@@ -182,31 +269,24 @@ export function createNodeStore({ ensureDb, persistDb }) {
     if (filters.source) { where.push("source = ?"); params.push(String(filters.source)); }
     if (filters.norad_cat_id) { where.push("norad_cat_id = ?"); params.push(Number(filters.norad_cat_id)); }
     const limit = clampLimit(filters.limit, 50, 500);
-    return getRows(db, `SELECT ${OBSERVATION_COLUMNS} FROM observations ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC, rowid DESC LIMIT ${limit}`, params).map(mapObservation);
+    return (await db.all(`SELECT ${OBSERVATION_COLUMNS} FROM observations ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC, rowid DESC LIMIT ${limit}`, params)).map(mapObservation);
   }
 
   async function getObservationById(observationId) {
     const db = await dbWithTables();
-    const rows = getRows(db, `SELECT ${OBSERVATION_COLUMNS} FROM observations WHERE observation_id = ? LIMIT 1`, [String(observationId)]);
+    const rows = await db.all(`SELECT ${OBSERVATION_COLUMNS} FROM observations WHERE observation_id = ? LIMIT 1`, [String(observationId)]);
     return rows.length ? mapObservation(rows[0]) : null;
   }
 
   async function getLatestObservationEnvelopeHash(nodeId) {
     const db = await dbWithTables();
-    const rows = getRows(db, "SELECT envelope_hash FROM observations WHERE node_id = ? ORDER BY rowid DESC LIMIT 1", [String(nodeId)]);
+    const rows = await db.all("SELECT envelope_hash FROM observations WHERE node_id = ? ORDER BY rowid DESC LIMIT 1", [String(nodeId)]);
     return rows.length ? rows[0][0] : null;
   }
 
-  async function saveNodeReceipt({ node_id, subject_kind, subject_id, receipt, created_at }) {
-    if (!NODE_RECEIPT_SUBJECTS.includes(subject_kind)) throw new TypeError(`unknown node receipt subject: ${subject_kind}`);
-    const db = await dbWithTables();
-    db.run(
-      `INSERT INTO node_receipts (receipt_id, node_id, subject_kind, subject_id, record_hash, previous_hash, receipt_hash, issuer, timestamp, receipt_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [receipt.receipt_id, node_id, subject_kind, subject_id, receipt.record_hash, receipt.previous_hash ?? null, receipt.receipt_hash, receipt.issuer, receipt.timestamp, JSON.stringify(receipt), created_at ?? new Date().toISOString()]
-    );
-    await persistDb();
-    return { node_id, subject_kind, subject_id, receipt };
+  async function saveNodeReceipt(args) {
+    await write([receiptInsert(args)]);
+    return { node_id: args.node_id, subject_kind: args.subject_kind, subject_id: args.subject_id, receipt: args.receipt };
   }
 
   /** Receipts in chain (append) order, oldest first. */
@@ -217,30 +297,30 @@ export function createNodeStore({ ensureDb, persistDb }) {
     if (filters.node_id) { where.push("node_id = ?"); params.push(String(filters.node_id)); }
     if (filters.subject_kind) { where.push("subject_kind = ?"); params.push(String(filters.subject_kind)); }
     const limit = clampLimit(filters.limit, 100, 1000);
-    return getRows(db, `SELECT ${NODE_RECEIPT_COLUMNS} FROM node_receipts ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY rowid ASC LIMIT ${limit}`, params).map(mapNodeReceipt);
+    return (await db.all(`SELECT ${NODE_RECEIPT_COLUMNS} FROM node_receipts ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY rowid ASC LIMIT ${limit}`, params)).map(mapNodeReceipt);
   }
 
   async function countNodeReceipts(nodeId) {
     const db = await dbWithTables();
-    const rows = getRows(db, "SELECT COUNT(*) FROM node_receipts WHERE node_id = ?", [String(nodeId)]);
+    const rows = await db.all("SELECT COUNT(*) FROM node_receipts WHERE node_id = ?", [String(nodeId)]);
     return rows.length ? Number(rows[0][0]) : 0;
   }
 
   async function getNodeReceiptById(receiptId) {
     const db = await dbWithTables();
-    const rows = getRows(db, `SELECT ${NODE_RECEIPT_COLUMNS} FROM node_receipts WHERE receipt_id = ? LIMIT 1`, [String(receiptId)]);
+    const rows = await db.all(`SELECT ${NODE_RECEIPT_COLUMNS} FROM node_receipts WHERE receipt_id = ? LIMIT 1`, [String(receiptId)]);
     return rows.length ? mapNodeReceipt(rows[0]) : null;
   }
 
   async function getNodeReceiptByHash(receiptHash) {
     const db = await dbWithTables();
-    const rows = getRows(db, `SELECT ${NODE_RECEIPT_COLUMNS} FROM node_receipts WHERE receipt_hash = ? LIMIT 1`, [String(receiptHash)]);
+    const rows = await db.all(`SELECT ${NODE_RECEIPT_COLUMNS} FROM node_receipts WHERE receipt_hash = ? LIMIT 1`, [String(receiptHash)]);
     return rows.length ? mapNodeReceipt(rows[0]) : null;
   }
 
   async function getLatestNodeReceiptHash(nodeId) {
     const db = await dbWithTables();
-    const rows = getRows(db, "SELECT receipt_hash FROM node_receipts WHERE node_id = ? ORDER BY rowid DESC LIMIT 1", [String(nodeId)]);
+    const rows = await db.all("SELECT receipt_hash FROM node_receipts WHERE node_id = ? ORDER BY rowid DESC LIMIT 1", [String(nodeId)]);
     return rows.length ? rows[0][0] : null;
   }
 
@@ -259,15 +339,18 @@ export function createNodeStore({ ensureDb, persistDb }) {
   }
 
   return {
-    savePassPrediction, listPassPredictions, getPassPredictionById,
-    saveObservation, listObservations, getObservationById, getLatestObservationEnvelopeHash,
+    chainGuards,
+    savePassPrediction, savePassPredictionWithReceipt, listPassPredictions, getPassPredictionById,
+    saveObservation, saveObservationWithReceipt, listObservations, getObservationById, getLatestObservationEnvelopeHash,
     saveNodeReceipt, listNodeReceipts, countNodeReceipts, getNodeReceiptById, getNodeReceiptByHash, getLatestNodeReceiptHash, getNodeReceiptSubjectRecord
   };
 }
 
 const store = createNodeStore(defaultDb);
 export const {
-  savePassPrediction, listPassPredictions, getPassPredictionById,
-  saveObservation, listObservations, getObservationById, getLatestObservationEnvelopeHash,
+  chainGuards,
+  savePassPrediction, savePassPredictionWithReceipt, listPassPredictions, getPassPredictionById,
+  saveObservation, saveObservationWithReceipt, listObservations, getObservationById, getLatestObservationEnvelopeHash,
   saveNodeReceipt, listNodeReceipts, countNodeReceipts, getNodeReceiptById, getNodeReceiptByHash, getLatestNodeReceiptHash, getNodeReceiptSubjectRecord
 } = store;
+export { wrapSqlJsDatabase, wrapLibsqlClient, isUniqueViolation } from "./database.js";
