@@ -9,7 +9,7 @@ The reference node of the Frontier State Protocol. One operator-controlled proce
 
 It is small on purpose: Node 20+, four dependencies, one SQLite file. Run it on a mini PC next to a receiver, on a laptop, or in a container. It needs nothing from any other operator.
 
-Specification and reference registry: `iricity-state-stack`. Primitives and conformance vectors: `@iricity/frontier-shared`. License: Apache-2.0.
+Specification and reference registry: `iricity-state-stack`. Primitives and conformance vectors: `@iricity/frontier-shared` on npm. License: Apache-2.0.
 
 ## Run it in five minutes
 

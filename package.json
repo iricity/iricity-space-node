@@ -28,7 +28,6 @@
     "docs/*.md",
     "examples",
     "scripts",
-    "vendor",
     "node.example.json",
     "README.md",
     "CHANGELOG.md",
@@ -43,7 +42,7 @@
     "demo:two-nodes": "node examples/two-nodes.mjs"
   },
   "dependencies": {
-    "@iricity/frontier-shared": "file:vendor/iricity-frontier-shared-0.5.0.tgz",
+    "@iricity/frontier-shared": "^0.5.0",
     "fastify": "^5.2.1",
     "satellite.js": "^7.1.0",
     "sql.js": "^1.13.0"

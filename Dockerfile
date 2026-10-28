@@ -1,7 +1,6 @@
 FROM node:22-alpine
 WORKDIR /app
 COPY package.json package-lock.json ./
-COPY vendor ./vendor
 RUN npm ci --omit=dev --no-audit --no-fund
 COPY src ./src
 COPY docs/openapi.yaml ./docs/openapi.yaml
