@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { buildApp } from "./app.js";
 import { HOST, PORT } from "./config.js";
 

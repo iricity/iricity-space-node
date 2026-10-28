@@ -14,7 +14,7 @@ Specification and reference registry: `iricity-state-stack`. Primitives and conf
 ## Run it in five minutes
 
 ```bash
-git clone <this repository> && cd space-node
+git clone https://github.com/iricity/iricity-space-node.git && cd iricity-space-node
 npm ci
 cp node.example.json node.json      # edit: node_id, operator, site coordinates, jurisdiction
 npm run keygen                      # prints a did:key and a private key PEM
@@ -31,6 +31,15 @@ curl -s "localhost:3100/passes?norad_id=25544&hours=12" | jq '.prediction.passes
 curl -s -X POST localhost:3100/observations -H "x-operator-key: $NODE_OPERATOR_KEY" \
   -H "content-type: application/json" -d '{"observation":{"measurement_type":"noise_floor","value_dbm":-104}}' | jq .receipt
 curl -s localhost:3100/receipts/verify | jq .verified
+```
+
+Or without cloning, from npm:
+
+```bash
+npm install -g @iricity/space-node
+space-node-keygen                   # prints a did:key and a private key PEM
+NODE_ID=node_mysite NODE_OPERATOR="My Organization" NODE_SITE_LATITUDE=52.52 NODE_SITE_LONGITUDE=13.405 \
+  NODE_SIGNING_PRIVATE_KEY="$(cat key.pem)" NODE_OPERATOR_KEY="$(openssl rand -hex 24)" space-node
 ```
 
 The full walkthrough, including what each setting means and how to check a node from outside, is in [docs/RUN_YOUR_OWN_NODE.md](docs/RUN_YOUR_OWN_NODE.md).

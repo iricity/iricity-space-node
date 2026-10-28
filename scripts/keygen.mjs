@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // Prints a fresh ed25519 node key: the did:key to publish and the PEM to keep secret.
 import { generateEd25519KeyPair } from "@iricity/frontier-shared";
 

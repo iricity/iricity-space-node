@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0 - 2026-10-28
+
+- First version on npm as `@iricity/space-node`, with `space-node` and `space-node-keygen` as commands. The repository is public under Apache-2.0.
+- Depends on `@iricity/frontier-shared` from the registry.
+
 ## 0.3.0 - 2026-10-27
 
 - Discovery: `GET /.well-known/frontier-node.json` serves the node's signed descriptor (`node-descriptor.json/1`); `NODE_PUBLIC_URL` makes its endpoints absolute. `@iricity/space-node/descriptor` exports the pure builder for operated stacks. The two-node demonstration discovers both nodes into the registry and anchors nothing new; registry anchoring lives in the registry.

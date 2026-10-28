@@ -1,10 +1,9 @@
 {
   "name": "@iricity/space-node",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Reference node of the Frontier State Protocol: a did:key identity, self-declared authorizations, signed pass predictions and signed observations, with an append-only receipt chain anyone can verify offline.",
   "license": "Apache-2.0",
   "type": "module",
-  "private": true,
   "engines": {
     "node": ">=20"
   },
@@ -49,5 +48,31 @@
   },
   "devDependencies": {
     "@redocly/cli": "^1.27.1"
+  },
+  "keywords": [
+    "space",
+    "satellite-tracking",
+    "sgp4",
+    "satnogs",
+    "did-key",
+    "ed25519",
+    "verifiable-data",
+    "fastify",
+    "frontier-state-protocol"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iricity/iricity-space-node.git"
+  },
+  "homepage": "https://github.com/iricity/iricity-space-node#readme",
+  "bugs": {
+    "url": "https://github.com/iricity/iricity-space-node/issues"
+  },
+  "bin": {
+    "space-node": "src/server.js",
+    "space-node-keygen": "scripts/keygen.mjs"
   }
 }
