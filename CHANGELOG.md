@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1 - 2026-10-28
+
+- First release through the trusted publisher, with provenance. No code change.
+
 ## 0.4.0 - 2026-10-28
 
 - First version on npm as `@iricity/space-node`, with `space-node` and `space-node-keygen` as commands. The repository is public under Apache-2.0.

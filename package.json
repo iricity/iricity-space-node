@@ -1,6 +1,6 @@
 {
   "name": "@iricity/space-node",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Reference node of the Frontier State Protocol: a did:key identity, self-declared authorizations, signed pass predictions and signed observations, with an append-only receipt chain anyone can verify offline.",
   "license": "Apache-2.0",
   "type": "module",
